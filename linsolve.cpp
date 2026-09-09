@@ -1,10 +1,9 @@
-// linsolve.cpp -- how much do the matmul kernels actually buy you?
+// linsolve.cpp -- what is a fast matrix multiply actually worth?
 //
-// The sibling project (matmul_benchmark\windows\matmul.cpp) times six
-// multiply kernels on a synthetic square multiply and reports GFLOPS. That
-// answers "how fast is the kernel", not "does the kernel make my program
-// faster". This one answers the second question, by solving a real linear
-// system Ax = b three different ways:
+// Timing a multiply on its own tells you how fast the kernel is. It does not
+// tell you whether the kernel makes a real program faster. Solving Ax = b is
+// a real task with an answer that can be checked, so this benchmark solves
+// the same system three different ways and times each:
 //
 //   1. solve_by_inversion   compute A^-1 by Gauss-Jordan, then x = A^-1 b.
 //                           The deliberately bad baseline -- about 3x the
@@ -16,13 +15,21 @@
 //                           same algorithm appears six times in the table and
 //                           differs only in which multiply it calls.
 //
-// The six kernels below are copied VERBATIM from matmul.cpp. Nothing about
-// them is retuned or "improved" here, which is the whole point: any speedup
-// in the blocked-LU rows is honestly attributable to the optimization work
-// that was already done over there.
+// The six multiply kernels each add one optimization to the previous:
+//   1. multiply_naive      textbook i-j-k loop order
+//   2. multiply_reordered  i-k-j loop order (stride-1 memory access)
+//   3. multiply_blocked    cache tiling on top of the reordered loop
+//   4. multiply_simd       AVX2 intrinsics on top of the reordered loop
+//   5. multiply_parallel   tiling + OpenMP threads
+//   6. multiply_full       tiling + AVX2 + OpenMP threads
 //
-// Built for the same machine as the sibling project: Intel Core i7-9750H
-// (6 cores / 12 threads, AVX2 + FMA), MSYS2 mingw64 g++ 14.
+// The kernel goes into solve_blocked_lu as a plain function pointer, so all
+// six rows run the same compiled factorization and the kernel is the only
+// variable in the comparison.
+//
+// Tuned for this machine: Intel Core i7-9750H (6 cores / 12 threads, AVX2 +
+// FMA, 32 KB L1d per core, 256 KB L2 per core, 12 MB shared L3), built with
+// MSYS2 mingw64 g++ 14.
 
 #include <algorithm>
 #include <chrono>
@@ -73,9 +80,9 @@ const double RANDOM_MAX = 1.0;
 const double DIAGONAL_BOOST_PER_N = 1.0;
 
 // Gaussian elimination is backward stable, so an honest solver's residual
-// lands around eps * n * ||b||. This is that bound with slack, and it is what
-// replaces matmul.cpp's fixed 1e-9 tolerance: at n = 2048 an absolute 1e-9 is
-// below the noise floor and would fail perfectly good answers.
+// lands around eps * n * ||b||. This is that bound with slack. A fixed
+// absolute tolerance will not do: at n = 2048 an absolute 1e-9 sits below the
+// noise floor and would fail perfectly good answers.
 const double RESIDUAL_TOLERANCE_UNITS = 256.0;
 
 // A pivot smaller than this means the matrix is singular to working
@@ -88,7 +95,7 @@ const int NUM_METHODS = 8;   // inversion + unblocked LU + six blocked-LU rows
 const std::string RESULTS_CSV_PATH = "results_solve.csv";
 
 // ---------------------------------------------------------------------------
-// Matrix: one flat row-major buffer         (verbatim from matmul.cpp)
+// Matrix: one flat row-major buffer
 // ---------------------------------------------------------------------------
 
 // A vector<vector<double>> would heap-allocate every row separately and
@@ -125,7 +132,7 @@ void fill_random(Matrix& matrix, unsigned seed) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Naive: textbook i-j-k order            (verbatim from matmul.cpp)
+// 1. Naive: textbook i-j-k order
 // ---------------------------------------------------------------------------
 
 // The inner loop over k reads A(i,k) contiguously, but reads B(k,j) with
@@ -147,7 +154,7 @@ Matrix multiply_naive(const Matrix& A, const Matrix& B) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Reordered: i-k-j order                 (verbatim from matmul.cpp)
+// 2. Reordered: i-k-j order
 // ---------------------------------------------------------------------------
 
 // Swapping j and k makes A(i,k) a loop-invariant scalar and leaves the
@@ -168,7 +175,7 @@ Matrix multiply_reordered(const Matrix& A, const Matrix& B) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Blocked: cache tiling on top of the reordered loop     (verbatim)
+// 3. Blocked: cache tiling on top of the reordered loop
 // ---------------------------------------------------------------------------
 
 // At large N a full row of B or C is far bigger than L1/L2, so by the time
@@ -204,7 +211,7 @@ Matrix multiply_blocked(const Matrix& A, const Matrix& B) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. SIMD: AVX2 on top of the reordered loop                (verbatim)
+// 4. SIMD: AVX2 on top of the reordered loop
 // ---------------------------------------------------------------------------
 
 // Same i-k-j access pattern, but the innermost loop handles 4 doubles per
@@ -250,7 +257,7 @@ Matrix multiply_simd(const Matrix& A, const Matrix& B) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Parallel: tiling + OpenMP threads                      (verbatim)
+// 5. Parallel: tiling + OpenMP threads
 // ---------------------------------------------------------------------------
 
 // multiply_blocked with the outermost loop (over row blocks) split across
@@ -288,7 +295,7 @@ Matrix multiply_parallel(const Matrix& A, const Matrix& B) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Full: tiling + AVX2 + OpenMP                           (verbatim)
+// 6. Full: tiling + AVX2 + OpenMP
 // ---------------------------------------------------------------------------
 
 // Everything at once: row blocks spread over the 12 hardware threads, each
