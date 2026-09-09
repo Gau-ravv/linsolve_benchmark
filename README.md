@@ -159,13 +159,3 @@ And it is less accurate at every size:
 Forming A⁻¹ explicitly commits rounding that solving in place never commits.
 Slower *and* wronger, consistently — which is the whole case against it, made
 concrete instead of folkloric.
-
-## Files
-
-| File | |
-|---|---|
-| `linsolve.cpp` | Kernels, three solvers, benchmark harness. |
-| `build.bat` / `run.bat` | One `g++` line; build, then run. |
-| `results_solve.csv` | `size,method,elapsed_ms,residual,error,speedup,check` |
-
-No `Makefile` — there is no `make` on this PC.
